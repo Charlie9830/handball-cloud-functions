@@ -1,0 +1,1 @@
+Firebase Cloud Function source code for use with the Handball App.
