@@ -8,8 +8,8 @@
     | **************************************************
     */
 import { DirectoryStore, InviteStore, MemberStore } from '../../../handball-libs/libs/pounder-stores';
-import { DIRECTORY, USERS, TASKS, TASKLISTS, PROJECTLAYOUTS, INVITES, REMOTES, REMOTE_IDS, MEMBERS } from '../../../handball-libs/libs/pounder-firebase/paths';
-import MultiBatch from 'firestore-multibatch';
+import { DIRECTORY, USERS, TASKS, TASKLISTS, PROJECTLAYOUTS, INVITES, REMOTES, REMOTE_IDS, MEMBERS, TASKCOMMENTS } from '../../../handball-libs/libs/pounder-firebase/paths';
+var { MultiBatch, BATCH_LIMIT } = require('firestore-multibatch');
 
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
@@ -17,6 +17,23 @@ const admin = require('firebase-admin');
 admin.initializeApp({
     credential: admin.credential.applicationDefault(),
 });
+
+exports.removeLocalOrphanedTaskComments = functions.firestore.document('users/{userId}/tasks/{taskId}').onDelete((snapshot, context ) => {
+    var userId = context.params.userId;
+    var taskId = context.params.taskId;
+
+    var taskCommentsQuery = admin.firestore().collection(USERS).doc(userId).collection(TASKS).doc(taskId).collection(TASKCOMMENTS);
+    return removeOrphanedTaskComments(taskCommentsQuery);
+})
+
+exports.removeRemoteOrphanedTaskComments = functions.firestore.document('remotes/{projectId}/tasks/{taskId}').onDelete((snapshot, context) => {
+    var projectId = context.params.userId;
+    var taskId = context.params.taskId;
+
+    var taskCommentsQuery = admin.firestore().collection(REMOTES).doc(projectId).collection(TASKS).doc(taskId).collection(TASKCOMMENTS);
+
+    return removeOrphanedTaskComments(taskCommentsQuery);
+})
 
 exports.removeUserFromDirectory = functions.auth.user().onDelete((user) => {
     return admin.firestore().collection(DIRECTORY).doc(user.email).delete().then(() => {
@@ -41,6 +58,30 @@ exports.removeRemoteTasksOrphanedFromTaskLists = functions.firestore.document('r
 
     return removeOrphanTasksAsync(tasksQuery);
 })
+
+function removeOrphanedTaskComments(query) {
+    return new Promise((resolve, reject) => {
+        query.get().then(snapshot => {
+            if (snapshot.empty !== true) {
+                var batch = new MultiBatch(admin.firestore());
+
+                snapshot.forEach(doc => {
+                    batch.delete(doc.ref);
+                })
+
+                batch.commit().then( () => {
+                    resolve();
+                }).catch(error => {
+                    reject(error);
+                })
+            }
+
+            else {
+                resolve();
+            }
+        })
+    })
+}
 
 function removeOrphanTasksAsync(query) {
     return new Promise((resolve, reject) => {

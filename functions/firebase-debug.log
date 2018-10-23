@@ -1,0 +1,18 @@
+[debug] [2018-10-23T05:26:04.776Z] ----------------------------------------------------------------------
+[debug] [2018-10-23T05:26:04.778Z] Command:       C:\Program Files\nodejs\node.exe C:\Users\Charlie\AppData\Roaming\npm\node_modules\firebase-tools\bin\firebase deploy
+[debug] [2018-10-23T05:26:04.778Z] CLI Version:   3.19.0
+[debug] [2018-10-23T05:26:04.778Z] Platform:      win32
+[debug] [2018-10-23T05:26:04.778Z] Node Version:  v8.7.0
+[debug] [2018-10-23T05:26:04.779Z] Time:          Tue Oct 23 2018 16:26:04 GMT+1100 (AUS Eastern Daylight Time)
+[debug] [2018-10-23T05:26:04.779Z] ----------------------------------------------------------------------
+[debug] 
+[debug] [2018-10-23T05:26:04.789Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2018-10-23T05:26:04.791Z] > authorizing via signed-in user
+[debug] [2018-10-23T05:26:04.793Z] >>> HTTP REQUEST GET https://admin.firebase.com/v1/projects/halo-todo  
+  
+ Tue Oct 23 2018 16:26:04 GMT+1100 (AUS Eastern Daylight Time)
+[debug] [2018-10-23T05:26:05.738Z] <<< HTTP RESPONSE 200
+[debug] [2018-10-23T05:26:05.739Z] >>> HTTP REQUEST GET https://admin.firebase.com/v1/database/halo-todo/tokens  
+  
+ Tue Oct 23 2018 16:26:05 GMT+1100 (AUS Eastern Daylight Time)
+[debug] [2018-10-23T05:26:06.449Z] <<< HTTP RESPONSE 200
