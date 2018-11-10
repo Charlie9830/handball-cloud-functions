@@ -8,7 +8,8 @@
     | **************************************************
     */
 import { DirectoryStore, InviteStore, MemberStore } from '../../../handball-libs/libs/pounder-stores';
-import { DIRECTORY, USERS, TASKS, TASKLISTS, PROJECTLAYOUTS, INVITES, REMOTES, REMOTE_IDS, MEMBERS, TASKCOMMENTS } from '../../../handball-libs/libs/pounder-firebase/paths';
+import { DIRECTORY, USERS, TASKS, TASKLISTS, PROJECTLAYOUTS, INVITES, REMOTES, REMOTE_IDS, MEMBERS, TASKCOMMENTS, JOBS_QUEUE } from '../../../handball-libs/libs/pounder-firebase/paths';
+import * as JobTypes from '../../../handball-libs/libs/pounder-firebase/jobTypes';
 var { MultiBatch, BATCH_LIMIT } = require('firestore-multibatch');
 
 const functions = require('firebase-functions');
@@ -17,6 +18,33 @@ const admin = require('firebase-admin');
 admin.initializeApp({
     credential: admin.credential.applicationDefault(),
 });
+
+exports.performJob = functions.firestore.document('jobsQueue/{jobId}').onCreate((snapshot, context ) => {
+    return new Promise((resolve, reject) => {
+        var job = snapshot.data();
+        var type = job.type;
+        var jobId = context.params.jobId;
+
+        switch (type) {
+            case JobTypes.CLEANUP_REMOTE_TASKLIST_MOVE:
+                cleanupRemoteTaskListMoveAsync(job.payload).then(() => {
+                    return completeJob(jobId, 'success', null);
+                }).catch(error => {
+                    return completeJob(jobId, 'failure', error );
+                });
+                break;
+
+            case JobTypes.CLEANUP_LOCAL_TASKLIST_MOVE:
+                cleanupLocalTaskListMoveAsync(job.payload).then(() => {
+                    return completeJob(jobId, 'success', null);
+                }).catch(error => {
+                    return completeJob(jobId, 'failure', error);
+                });
+                break; 
+        }
+    })
+    
+})
 
 exports.removeLocalOrphanedTaskComments = functions.firestore.document('users/{userId}/tasks/{taskId}').onDelete((snapshot, context ) => {
     var userId = context.params.userId;
@@ -384,7 +412,141 @@ exports.removeRemoteProject = functions.https.onCall((data, context) => {
             }
         })
     })  
-    
 })
 
 
+async function cleanupRemoteTaskListMoveAsync(payload) {
+    /*
+        -> Collect completedTasks related to the Task List and COPY them to the Target Project. Save an Array of TaskIds
+        -> Concat the CompletedTaskIds array together with the taskIds array from the Payload.
+        -> Iterate through the taskIds, Copy Task Comments to the targetProject then Delete the original Task.
+        -> Another Cloud Function will Trigger on Task Delete and cleanup comments from Original Project.
+    
+    EXPECTED PAYLOAD
+        sourceProjectId               string
+        targetProjectId               string
+        taskListWidgetId              string
+        taskIds                       []                                    Id's of Tasks belonging to the Task List.
+        targetTasksRefPath            string (Document Reference Path);
+        targetTaskListRefPath         string (Document Reference Path);
+        sourceTasksRefPath            string (Document Reference Path);
+        sourceTaskListRefPath         string (Document Reference Path); 
+    */
+        var requests = [];
+        var batch = new MultiBatch(admin.firestore());
+
+        var taskIds = payload.taskIds;
+        var sourceProjectId = payload.sourceProjectId;
+        var targetProjectId = payload.targetProjectId;
+        var taskListWidgetId = payload.taskListWidgetId;
+        var sourceTasksRef = admin.firestore().collection(payload.sourceTasksRefPath);
+        var targetTasksRef = admin.firestore().collection(payload.targetTasksRefPath);
+        var sourceTaskListRef = admin.firestore().doc(payload.sourceTaskListRefPath);
+
+        // Copy Completed Tasks. Promise will resolve with an array of TaskIds that were moved.
+        var completedTaskIds = await copyCompletedTasksToProjectAsync(sourceProjectId, targetProjectId, taskListWidgetId, sourceTasksRef, targetTasksRef);
+            // Combine the TaskIds from the Job Payload (Moved by the Client)
+            // and the TaskIds returned from copyCompletedTasksToProjectAsync (Copied by Server).
+            var mergedTaskIds = [...taskIds, ...completedTaskIds];
+
+            mergedTaskIds.forEach(taskId => {
+                requests.push(sourceTasksRef.doc(taskId).collection(TASKCOMMENTS).get().then(snapshot => {
+                    if (!snapshot.empty) {
+                        // Iterate through Comments and add them to the new Location, then delete the Task from the old Location.
+                        // Another cloud Function will kick in and delete the Task comments from the source location.
+                        snapshot.forEach(doc => {
+                            batch.set(targetTasksRef.doc(taskId).collection(TASKCOMMENTS).doc(doc.id), doc.data());
+                            batch.delete(sourceTasksRef.doc(taskId));
+                        })
+                    }
+                }))
+            })
+
+            // Delete the source Task List.
+            batch.delete(sourceTaskListRef);
+
+            await Promise.all(requests);
+            await batch.commit();
+            return;
+}
+
+async function copyCompletedTasksToProjectAsync(sourceProjectId, targetProjectId, taskListWidgetId, sourceTasksRef, targetTasksRef) {
+    var completedTaskIds = [];
+    var batch = new MultiBatch(admin.firestore());
+
+    var snapshot = await sourceTasksRef.where("taskList", "==", taskListWidgetId).where("isComplete", "==", true).get();
+
+    if (!snapshot.empty) {
+        snapshot.forEach(doc => {
+            completedTaskIds.push(doc.id);
+            batch.set(targetTasksRef.doc(doc.id), { ...doc.data(), project: targetProjectId });
+        })
+
+        await batch.commit();
+    }
+
+    return completedTaskIds;
+}
+
+async function cleanupLocalTaskListMoveAsync(payload) {
+
+    /*
+        -> Collect completed Tasks and adjust their 'project' field to the Target Project Id.
+    
+    EXPECTED PAYLOAD
+        targetProjectId               string
+        taskListWidgetId              string
+        sourceTasksRefPath            string
+    */
+
+    var targetProjectId = payload.targetProjectId;
+    var taskListWidgetId = payload.taskListWidgetId;
+    var tasksRef = admin.firestore().collection(payload.sourceTasksRefPath);
+
+    var snapshot = await tasksRef.where("taskList", "==", taskListWidgetId).where("isComplete", "==", true).get();
+
+    if (!snapshot.empty) {
+        var batch = new MultiBatch(admin.firestore());
+
+        snapshot.forEach(doc => {
+            batch.update(doc.ref, { project: targetProjectId });
+        })
+
+        await batch.commit();
+    }
+
+    return;
+}
+
+async function completeJob(jobId, result, error) {
+    if (result === 'success') {
+        // Remove Job from the Queue.
+        await admin.firestore().collection(JOBS_QUEUE).doc(jobId).delete();
+        return;
+    }
+
+    else {
+        // Job Failed. Leave Job in Queue and record Error.
+        await admin.firestore().collection(JOBS_QUEUE).doc(jobId).update({ error: convertErrorToString(error) });
+        return;
+    }
+}
+
+function convertErrorToString(error) {
+    if (typeof(error) === "string") {
+        return error;
+    }
+
+    if (typeof(error) === "object") {
+        if (error["message"] !== undefined) {
+            return error.message;
+        }
+
+        else {
+            return "Could not convert Error to String."
+        }
+    }
+
+    return "convertErrorToString failed to convert the error.";
+    
+}
