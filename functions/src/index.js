@@ -19,32 +19,57 @@ admin.initializeApp({
     credential: admin.credential.applicationDefault(),
 });
 
-exports.performJob = functions.firestore.document('jobsQueue/{jobId}').onCreate((snapshot, context ) => {
+exports.performJob = functions.firestore.document('jobsQueue/{jobId}').onCreate((snapshot, context ) => {   
     return new Promise((resolve, reject) => {
-        var job = snapshot.data();
-        var type = job.type;
-        var jobId = context.params.jobId;
-
-        switch (type) {
-            case JobTypes.CLEANUP_REMOTE_TASKLIST_MOVE:
-                cleanupRemoteTaskListMoveAsync(job.payload).then(() => {
-                    return completeJob(jobId, 'success', null);
-                }).catch(error => {
-                    return completeJob(jobId, 'failure', error );
-                });
-                break;
-
-            case JobTypes.CLEANUP_LOCAL_TASKLIST_MOVE:
-                cleanupLocalTaskListMoveAsync(job.payload).then(() => {
-                    return completeJob(jobId, 'success', null);
-                }).catch(error => {
-                    return completeJob(jobId, 'failure', error);
-                });
-                break; 
-        }
+        dispatchJobAsync(snapshot, context).then( () => {
+            resolve();
+        }).catch(error => {
+            reject(error);
+        })
     })
-    
 })
+
+async function dispatchJobAsync(snapshot, context) {
+    var job = snapshot.data();
+    var type = job.type;
+    var payload = job.payload;
+    var jobId = context.params.jobId;
+
+    // Remote TaskList Move.
+    if (type === JobTypes.CLEANUP_REMOTE_TASKLIST_MOVE) {
+        try {
+            await cleanupRemoteTaskListMoveAsync(payload);
+        }
+
+        catch(error) {
+            await completeJobAsync(jobId, 'failure', error);
+            return;
+        }
+
+        await completeJobAsync(jobId, 'success', null);
+        return;
+    }
+
+    // Local TaskList Move.
+    else if (type === JobTypes.CLEANUP_LOCAL_TASKLIST_MOVE) {
+        try {
+            await cleanupLocalTaskListMoveAsync(payload);
+        }
+        
+        catch {
+            await completeJobAsync(jobId, 'failure', error);
+            return;
+        }
+
+        await completeJobAsync(jobId, 'success', null);
+        return;
+    }
+
+    else {
+        // Unrecognized Job Type.
+        throw "Unrecognized Job Type";
+    }
+}
 
 exports.removeLocalOrphanedTaskComments = functions.firestore.document('users/{userId}/tasks/{taskId}').onDelete((snapshot, context ) => {
     var userId = context.params.userId;
@@ -518,17 +543,15 @@ async function cleanupLocalTaskListMoveAsync(payload) {
     return;
 }
 
-async function completeJob(jobId, result, error) {
+function completeJobAsync(jobId, result, error) {
     if (result === 'success') {
         // Remove Job from the Queue.
-        await admin.firestore().collection(JOBS_QUEUE).doc(jobId).delete();
-        return;
+        return admin.firestore().collection(JOBS_QUEUE).doc(jobId).delete();
     }
 
     else {
         // Job Failed. Leave Job in Queue and record Error.
-        await admin.firestore().collection(JOBS_QUEUE).doc(jobId).update({ error: convertErrorToString(error) });
-        return;
+        return admin.firestore().collection(JOBS_QUEUE).doc(jobId).update({ error: convertErrorToString(error) });
     }
 }
 
