@@ -216,7 +216,7 @@ exports.sendProjectInvite = functions.https.onCall((data, context) => {
     return inviteRef.set(Object.assign({}, invite)).then(() => {
         // Invite Sent. Add User to members collection of Target Project.
         var newMember = new MemberStore(targetUserId, projectId, targetDisplayName, targetEmail, 'pending', role);
-        var newMemberRef = admin.firestore().collection(REMOTES).doc(projectId).collection(MEMBERS).doc(targetUserId);
+        var newMemberRef = admin.firestore().collection('projects').doc(projectId).collection(MEMBERS).doc(targetUserId);
 
         return newMemberRef.set(Object.assign({}, newMember)).then(() => {
             return { status: 'complete' }
@@ -297,7 +297,7 @@ exports.acceptProjectInvite = functions.https.onCall((data, context) => {
     var userId = context.auth.uid;
 
     // Check that the Current user still exists in the Remote Project's Member Collection.
-    return admin.firestore().collection(REMOTES).doc(projectId).collection(MEMBERS).get().then(snapshot => {
+    return admin.firestore().collection('projects').doc(projectId).collection(MEMBERS).get().then(snapshot => {
         var members = [];
         snapshot.forEach(doc => {
             members.push(doc.data());
@@ -309,10 +309,10 @@ exports.acceptProjectInvite = functions.https.onCall((data, context) => {
 
         if (memberIndex !== -1) {
             var batch = admin.firestore().batch();
-            var memberRef = admin.firestore().collection(REMOTES).doc(projectId).collection(MEMBERS).doc(userId);
+            var memberRef = admin.firestore().collection('projects').doc(projectId).collection(MEMBERS).doc(userId);
             batch.update(memberRef, { status: 'added' });
 
-            var remoteIdsRef = admin.firestore().collection(USERS).doc(userId).collection(REMOTE_IDS).doc(projectId);
+            var remoteIdsRef = admin.firestore().collection(USERS).doc(userId).collection('projectIds').doc(projectId);
             batch.set(remoteIdsRef, { projectId: projectId });
 
             return batch.commit().then(() => {
@@ -336,7 +336,7 @@ exports.denyProjectInvite = functions.https.onCall((data, context) => {
     var projectId = data.projectId;
     var userId = context.auth.uid;
 
-    var memberRef = admin.firestore().collection(REMOTES).doc(projectId).collection(MEMBERS).doc(userId);
+    var memberRef = admin.firestore().collection('projects').doc(projectId).collection(MEMBERS).doc(userId);
 
     return memberRef.update({ status: "rejected invite" }).then( () => {
         return { status: 'complete' };
