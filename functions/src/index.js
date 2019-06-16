@@ -240,8 +240,8 @@ exports.kickUserFromProject = functions.https.onCall((data, context) => {
     var userId = data.userId;
 
     var batch = admin.firestore().batch();
-    batch.delete(admin.firestore().collection(REMOTES).doc(projectId).collection(MEMBERS).doc(userId));
-    batch.delete(admin.firestore().collection(USERS).doc(userId).collection(REMOTE_IDS).doc(projectId));
+    batch.delete(admin.firestore().collection('projects').doc(projectId).collection(MEMBERS).doc(userId));
+    batch.delete(admin.firestore().collection(USERS).doc(userId).collection('projectIds').doc(projectId));
     batch.delete(admin.firestore().collection(USERS).doc(userId).collection(INVITES).doc(projectId));
 
     return batch.commit().then( () => {
