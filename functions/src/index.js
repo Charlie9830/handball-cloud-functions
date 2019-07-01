@@ -35,10 +35,10 @@ async function dispatchJobAsync(snapshot, context) {
     var payload = job.payload;
     var jobId = context.params.jobId;
 
-    // Remote TaskList Move.
-    if (type === JobTypes.CLEANUP_REMOTE_TASKLIST_MOVE) {
+    // Task List Move.
+    if (type === 'CLEANUP_TASKLIST_MOVE') {
         try {
-            await cleanupRemoteTaskListMoveAsync(payload);
+            await cleanupTaskListMoveAsync(payload);
         }
 
         catch(error) {
@@ -49,44 +49,12 @@ async function dispatchJobAsync(snapshot, context) {
         await completeJobAsync(jobId, 'success', null);
         return;
     }
-
-    // Local TaskList Move.
-    else if (type === JobTypes.CLEANUP_LOCAL_TASKLIST_MOVE) {
-        try {
-            await cleanupLocalTaskListMoveAsync(payload);
-        }
-        
-        catch {
-            await completeJobAsync(jobId, 'failure', error);
-            return;
-        }
-
-        await completeJobAsync(jobId, 'success', null);
-        return;
-    }
-
+    
     else {
         // Unrecognized Job Type.
         throw "Unrecognized Job Type";
     }
 }
-
-exports.removeLocalOrphanedTaskComments = functions.firestore.document('users/{userId}/tasks/{taskId}').onDelete((snapshot, context ) => {
-    var userId = context.params.userId;
-    var taskId = context.params.taskId;
-
-    var taskCommentsQuery = admin.firestore().collection(USERS).doc(userId).collection(TASKS).doc(taskId).collection(TASKCOMMENTS);
-    return removeOrphanedTaskComments(taskCommentsQuery);
-})
-
-exports.removeRemoteOrphanedTaskComments = functions.firestore.document('remotes/{projectId}/tasks/{taskId}').onDelete((snapshot, context) => {
-    var projectId = context.params.userId;
-    var taskId = context.params.taskId;
-
-    var taskCommentsQuery = admin.firestore().collection(REMOTES).doc(projectId).collection(TASKS).doc(taskId).collection(TASKCOMMENTS);
-
-    return removeOrphanedTaskComments(taskCommentsQuery);
-})
 
 exports.removeUserFromDirectory = functions.auth.user().onDelete((user) => {
     return admin.firestore().collection(DIRECTORY).doc(user.email).delete().then(() => {
@@ -254,44 +222,6 @@ exports.kickUserFromProject = functions.https.onCall((data, context) => {
     })
 })
 
-exports.kickAllUsersFromProject = functions.https.onCall((data, context) => {
-    var projectId = data.projectId;
-    return admin.firestore().collection(REMOTES).doc(projectId).collection(MEMBERS).get().then(snapshot => {
-        if (snapshot.empty !== true) {
-            // Build a Batch.
-            var batch = admin.firestore().batch();
-            snapshot.forEach(doc => {
-                batch.delete(admin.firestore().collection(REMOTES).doc(projectId).collection(MEMBERS).doc(doc.id));
-                batch.delete(admin.firestore().collection(USERS).doc(doc.id).collection(REMOTE_IDS).doc(projectId));
-                batch.delete(admin.firestore().collection(USERS).doc(doc.id).collection(INVITES).doc(projectId));
-            })
-
-            // Commit.
-            return batch.commit().then(() => {
-                return { status: 'complete' }
-            }).catch(error => {
-                return {
-                    status: 'error',
-                    message: 'Error occured while Kicking user: ' + error.message
-                }
-            })
-        }
-
-        else {
-            return { 
-                status: 'error',
-                message: 'Project has no contributors to kick.' }
-        }
-    })
-
-    var batch = admin.firestore().batch();
-    batch.delete(admin.firestore().collection(REMOTES).doc(projectId).collection(MEMBERS).doc(userId));
-    batch.delete(admin.firestore().collection(USERS).doc(userId).collection(REMOTE_IDS).doc(projectId));
-    batch.delete(admin.firestore().collection(USERS).doc(userId).collection(INVITES).doc(projectId));
-
-    
-})
-
 exports.acceptProjectInvite = functions.https.onCall((data, context) => {
     var projectId = data.projectId;
     var userId = context.auth.uid;
@@ -359,7 +289,7 @@ exports.removeRemoteProject = functions.https.onCall((data, context) => {
     var taskRefs = [];
     var memberIds = [];
     var memberRefs = [];
-    var initialRef = admin.firestore().collection(REMOTES).doc(projectId);
+    var initialRef = admin.firestore().collection('projects').doc(projectId);
 
     // Project Layouts.
     requests.push(initialRef.collection(PROJECTLAYOUTS).get().then( snapshot => {
@@ -416,7 +346,7 @@ exports.removeRemoteProject = functions.https.onCall((data, context) => {
 
         memberIds.forEach(id => {
             // Delete the RemoteId References of Members.
-            var remoteIdRef = admin.firestore().collection(USERS).doc(id).collection(REMOTE_IDS).doc(projectId);
+            var remoteIdRef = admin.firestore().collection(USERS).doc(id).collection('projectIds').doc(projectId);
             batch.delete(remoteIdRef);
 
             // Remove any unanswered Invites. Just in case.
@@ -440,7 +370,7 @@ exports.removeRemoteProject = functions.https.onCall((data, context) => {
 })
 
 
-async function cleanupRemoteTaskListMoveAsync(payload) {
+async function cleanupTaskListMoveAsync(payload) {
     /*
         -> Collect completedTasks related to the Task List and COPY them to the Target Project. Save an Array of TaskIds
         -> Concat the CompletedTaskIds array together with the taskIds array from the Payload.
@@ -463,13 +393,13 @@ async function cleanupRemoteTaskListMoveAsync(payload) {
         var taskIds = payload.taskIds;
         var sourceProjectId = payload.sourceProjectId;
         var targetProjectId = payload.targetProjectId;
-        var taskListWidgetId = payload.taskListWidgetId;
+        var taskListId = payload.taskListId;
         var sourceTasksRef = admin.firestore().collection(payload.sourceTasksRefPath);
         var targetTasksRef = admin.firestore().collection(payload.targetTasksRefPath);
         var sourceTaskListRef = admin.firestore().doc(payload.sourceTaskListRefPath);
 
         // Copy Completed Tasks. Promise will resolve with an array of TaskIds that were moved.
-        var completedTaskIds = await copyCompletedTasksToProjectAsync(sourceProjectId, targetProjectId, taskListWidgetId, sourceTasksRef, targetTasksRef);
+        var completedTaskIds = await copyCompletedTasksToProjectAsync(sourceProjectId, targetProjectId, taskListId, sourceTasksRef, targetTasksRef);
             // Combine the TaskIds from the Job Payload (Moved by the Client)
             // and the TaskIds returned from copyCompletedTasksToProjectAsync (Copied by Server).
             var mergedTaskIds = [...taskIds, ...completedTaskIds];
@@ -495,11 +425,11 @@ async function cleanupRemoteTaskListMoveAsync(payload) {
             return;
 }
 
-async function copyCompletedTasksToProjectAsync(sourceProjectId, targetProjectId, taskListWidgetId, sourceTasksRef, targetTasksRef) {
+async function copyCompletedTasksToProjectAsync(sourceProjectId, targetProjectId, taskListId, sourceTasksRef, targetTasksRef) {
     var completedTaskIds = [];
     var batch = new MultiBatch(admin.firestore());
 
-    var snapshot = await sourceTasksRef.where("taskList", "==", taskListWidgetId).where("isComplete", "==", true).get();
+    var snapshot = await sourceTasksRef.where("taskList", "==", taskListId).where("isComplete", "==", true).get();
 
     if (!snapshot.empty) {
         snapshot.forEach(doc => {
@@ -513,35 +443,6 @@ async function copyCompletedTasksToProjectAsync(sourceProjectId, targetProjectId
     return completedTaskIds;
 }
 
-async function cleanupLocalTaskListMoveAsync(payload) {
-
-    /*
-        -> Collect completed Tasks and adjust their 'project' field to the Target Project Id.
-    
-    EXPECTED PAYLOAD
-        targetProjectId               string
-        taskListWidgetId              string
-        sourceTasksRefPath            string
-    */
-
-    var targetProjectId = payload.targetProjectId;
-    var taskListWidgetId = payload.taskListWidgetId;
-    var tasksRef = admin.firestore().collection(payload.sourceTasksRefPath);
-
-    var snapshot = await tasksRef.where("taskList", "==", taskListWidgetId).where("isComplete", "==", true).get();
-
-    if (!snapshot.empty) {
-        var batch = new MultiBatch(admin.firestore());
-
-        snapshot.forEach(doc => {
-            batch.update(doc.ref, { project: targetProjectId });
-        })
-
-        await batch.commit();
-    }
-
-    return;
-}
 
 function completeJobAsync(jobId, result, error) {
     if (result === 'success') {
