@@ -26,7 +26,7 @@
     "babel-preset-env": "^1.7.0",
     "webpack": "^4.12.1",
     "webpack-babel-plugin": "0.0.2",
-    "webpack-cli": "^3.0.8",
+    "webpack-cli": "^3.3.12",
     "webpack-node-externals": "^1.7.2"
   },
   "private": true,
